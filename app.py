@@ -1,5 +1,5 @@
 """
-CMS Turístico de Cantabria (versión mejorada)
+CMS Turístico de Cantabria
 Guías turísticos · Recursos y Restaurantes
 """
 
@@ -13,6 +13,7 @@ import html
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
+
 st.set_page_config(
     page_title="CMS Cantabria",
     page_icon="🏔️",
@@ -30,12 +31,21 @@ URLS = {
     "experiencias_restaurantes": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=experiencias_restaurantes",
 }
 
+# ─────────────────────────────────────────────
+# VALIDACIÓN ESQUEMA
+# ─────────────────────────────────────────────
+
 REQUIRED_SCHEMAS = {
     "recursos": ["recurso", "municipio", "tipo", "web_oficial", "activo"],
     "contenidos_recursos": ["recurso", "bloque", "subtipo", "contenido"],
     "restaurantes": ["restaurante", "municipio"],
-    "experiencias_restaurantes": ["restaurante", "rating", "fecha"]
+    "experiencias_restaurantes": ["restaurante", "rating", "fecha"],
 }
+
+def validate_schema(df, key):
+    missing = [c for c in REQUIRED_SCHEMAS.get(key, []) if c not in df.columns]
+    if missing:
+        raise ValueError(f"Faltan columnas en {key}: {missing}")
 
 # ─────────────────────────────────────────────
 # UTILIDADES
@@ -44,12 +54,14 @@ REQUIRED_SCHEMAS = {
 def safe(x):
     return html.escape(str(x)) if x is not None else ""
 
-
-def validate_schema(df, key):
-    missing = [c for c in REQUIRED_SCHEMAS.get(key, []) if c not in df.columns]
-    if missing:
-        raise ValueError(f"Faltan columnas en {key}: {missing}")
-
+def mailto(asunto: str, cuerpo: str) -> str:
+    base = "https://mail.google.com/mail/?view=cm&fs=1"
+    return (
+        f"{base}"
+        f"&to={quote(EMAIL)}"
+        f"&su={quote(str(asunto))}"
+        f"&body={quote(str(cuerpo))}"
+    )
 
 def normalize_dates(df, cols):
     for c in cols:
@@ -57,13 +69,8 @@ def normalize_dates(df, cols):
             df[c] = pd.to_datetime(df[c], errors="coerce")
     return df
 
-
-def mailto(asunto, cuerpo):
-    return f"mailto:{EMAIL}?subject={quote(str(asunto))}&body={quote(str(cuerpo))}"
-
-
 # ─────────────────────────────────────────────
-# CARGA DE DATOS
+# CARGA DATOS
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=600)
@@ -92,11 +99,6 @@ def load_data():
 
     return dfs
 
-
-def get_data():
-    return load_data()
-
-
 # ─────────────────────────────────────────────
 # FECHAS
 # ─────────────────────────────────────────────
@@ -106,18 +108,16 @@ DIAS_ES = {
     3: "jueves", 4: "viernes", 5: "sábado", 6: "domingo",
 }
 
-
 # ─────────────────────────────────────────────
-# FILTRADO OPTIMIZADO (SIN APPLY)
+# FILTRADO (SIN APPLY)
 # ─────────────────────────────────────────────
 
 def filtrar_contenido(df, recurso, fecha):
     sub = df[df["recurso"] == recurso].copy()
-
     fecha = pd.Timestamp(fecha)
 
-    sub["fecha_inicio"] = pd.to_datetime(sub.get("fecha_inicio"))
-    sub["fecha_fin"] = pd.to_datetime(sub.get("fecha_fin"))
+    sub["fecha_inicio"] = pd.to_datetime(sub.get("fecha_inicio"), errors="coerce")
+    sub["fecha_fin"] = pd.to_datetime(sub.get("fecha_fin"), errors="coerce")
 
     mask = (
         (sub["fecha_inicio"].fillna(pd.Timestamp.min) <= fecha) &
@@ -130,48 +130,101 @@ def filtrar_contenido(df, recurso, fecha):
 
     return sub[mask]
 
+# ─────────────────────────────────────────────
+# EMAIL (PLANTILLAS COHERENTES)
+# ─────────────────────────────────────────────
+
+def mail_nuevo_recurso():
+    asunto = "[CMS Cantabria] Alta de nuevo recurso turístico"
+    cuerpo = """
+SOLICITUD DE ALTA DE RECURSO TURÍSTICO
+
+Nombre:
+Municipio:
+Tipo:
+Web oficial:
+Descripción:
+
+Fuente o motivo:
+""".strip()
+    return mailto(asunto, cuerpo)
+
+def mail_nuevo_restaurante():
+    asunto = "[CMS Cantabria] Alta de nuevo restaurante"
+    cuerpo = """
+SOLICITUD DE ALTA DE RESTAURANTE
+
+Nombre:
+Municipio:
+Grupos (Sí/No):
+Precio menú grupos:
+
+Descripción:
+""".strip()
+    return mailto(asunto, cuerpo)
+
+def mail_error_recurso(nombre):
+    asunto = f"[CMS Cantabria] Error en recurso: {nombre}"
+    cuerpo = f"""
+REPORTE DE ERROR
+
+Recurso: {nombre}
+
+Error detectado:
+Corrección propuesta:
+Fuente:
+""".strip()
+    return mailto(asunto, cuerpo)
+
+def mail_error_restaurante(nombre):
+    asunto = f"[CMS Cantabria] Error en restaurante: {nombre}"
+    cuerpo = f"""
+REPORTE DE ERROR
+
+Restaurante: {nombre}
+
+Error detectado:
+Corrección propuesta:
+Fuente:
+""".strip()
+    return mailto(asunto, cuerpo)
 
 # ─────────────────────────────────────────────
-# HTML BUILDERS
+# BLOQUES HTML
 # ─────────────────────────────────────────────
 
 def build_bloque(tipo, subtipo, contenido, fuente):
     return f"""
     <div class="bloque">
-        <div class="bloque-label">{safe(tipo)}</div>
-        <div class="bloque-subtipo">{safe(subtipo)}</div>
-        <div class="bloque-contenido">{safe(contenido)}</div>
-        <small style="color:#9ca3af">Fuente: {safe(fuente)}</small>
+        <b>{safe(tipo)}</b><br>
+        <i>{safe(subtipo)}</i><br>
+        {safe(contenido)}<br>
+        <small>Fuente: {safe(fuente)}</small>
     </div>
     """
-
 
 def build_disclaimer(web, ultima):
     fecha = ""
     if pd.notna(ultima):
-        fecha = f" · Última actualización: {pd.to_datetime(ultima).strftime('%d/%m/%Y')}"
+        fecha = f" · Actualizado: {pd.to_datetime(ultima).strftime('%d/%m/%Y')}"
 
     web_link = f' · <a href="{web}" target="_blank">Web oficial</a>' if web else ""
 
     return f"""
     <div class="disclaimer">
-        ⚠️ Información sujeta a cambios.{web_link}{fecha}
+        ⚠️ Información sujeta a cambios{web_link}{fecha}
     </div>
     """
 
-
-def build_report(nombre):
-    asunto = f"[CMS Cantabria] Error en {nombre}"
-    cuerpo = f"Error detectado en: {nombre}\nDescripción:\n"
-
+def build_report_recurso(nombre):
     return f"""
-    <div class="report-row">
-        <a class="report-btn" href="{mailto(asunto, cuerpo)}">
-        Reportar error
-        </a>
-    </div>
+    <a href="{mail_error_recurso(nombre)}">Reportar error</a>
     """
 
+def build_report_restaurante(nombre):
+    return f"""
+    <a href="{mail_error_restaurante(nombre)}">Reportar error</a>
+    """
 
 # ─────────────────────────────────────────────
 # CSS
@@ -180,86 +233,11 @@ def build_report(nombre):
 def inject_css():
     st.markdown("""
     <style>
-    .card {padding:1rem;border:1px solid #ddd;border-radius:10px;margin-bottom:1rem;}
-    .bloque {margin-top:0.5rem;padding:0.5rem;border-left:3px solid #0d7c9e;background:#f4f8fc;}
-    .disclaimer {font-size:0.8rem;color:#666;margin-top:0.5rem;}
-    .report-btn {font-size:0.75rem;color:#0d7c9e;}
+    .card {border:1px solid #ddd;padding:1rem;margin-bottom:1rem;border-radius:10px;}
+    .bloque {margin-top:0.5rem;padding:0.5rem;background:#f4f8fc;}
+    .disclaimer {font-size:0.8rem;color:#666;}
     </style>
     """, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────
-# MÓDULO RECURSOS
-# ─────────────────────────────────────────────
-
-def modulo_recursos(dfs):
-    recursos = dfs["recursos"]
-    contenidos = dfs["contenidos_recursos"]
-
-    fecha = st.date_input("Fecha", value=date.today())
-
-    muni_list = ["Todos"] + sorted(recursos["municipio"].dropna().unique())
-    muni = st.selectbox("Municipio", muni_list)
-
-    df = recursos[recursos["activo"] == True]
-
-    if muni != "Todos":
-        df = df[df["municipio"] == muni]
-
-    st.write(f"{len(df)} recursos")
-
-    for _, r in df.iterrows():
-        nombre = r["recurso"]
-
-        contenido = filtrar_contenido(contenidos, nombre, fecha)
-
-        bloques = ""
-        for _, c in contenido.iterrows():
-            bloques += build_bloque(
-                c.get("bloque"),
-                c.get("subtipo"),
-                c.get("contenido"),
-                c.get("fuente")
-            )
-
-        st.markdown(f"""
-        <div class="card">
-            <b>{safe(nombre)}</b>
-            {bloques}
-            {build_disclaimer(r.get("web_oficial"), r.get("ultima_actualizacion"))}
-            {build_report(nombre)}
-        </div>
-        """, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────
-# MÓDULO RESTAURANTES
-# ─────────────────────────────────────────────
-
-def modulo_restaurantes(dfs):
-    rest = dfs["restaurantes"]
-    exp = dfs["experiencias_restaurantes"]
-
-    muni_list = ["Todos"] + sorted(rest["municipio"].dropna().unique())
-    muni = st.selectbox("Municipio restaurantes", muni_list)
-
-    df = rest.copy()
-
-    if muni != "Todos":
-        df = df[df["municipio"] == muni]
-
-    for _, r in df.iterrows():
-        nombre = r["restaurante"]
-
-        reseñas = exp[exp["restaurante"] == nombre]
-
-        st.markdown(f"""
-        <div class="card">
-            <b>{safe(nombre)}</b>
-            <div>Reseñas: {len(reseñas)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
 
 # ─────────────────────────────────────────────
 # APP
@@ -270,15 +248,34 @@ def main():
 
     st.title("CMS Cantabria")
 
-    dfs = get_data()
+    dfs = load_data()
 
     tab1, tab2 = st.tabs(["Recursos", "Restaurantes"])
 
+    # ───── RECURSOS ─────
     with tab1:
-        modulo_recursos(dfs)
+        st.markdown(f'<a href="{mail_nuevo_recurso()}">➕ Añadir recurso</a>', unsafe_allow_html=True)
 
+        for _, r in dfs["recursos"].iterrows():
+            st.markdown(f"""
+            <div class="card">
+                <b>{safe(r["recurso"])}</b>
+                {build_disclaimer(r.get("web_oficial"), r.get("ultima_actualizacion"))}
+                {build_report_recurso(r["recurso"])}
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ───── RESTAURANTES ─────
     with tab2:
-        modulo_restaurantes(dfs)
+        st.markdown(f'<a href="{mail_nuevo_restaurante()}">➕ Añadir restaurante</a>', unsafe_allow_html=True)
+
+        for _, r in dfs["restaurantes"].iterrows():
+            st.markdown(f"""
+            <div class="card">
+                <b>{safe(r["restaurante"])}</b>
+                {build_report_restaurante(r["restaurante"])}
+            </div>
+            """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
